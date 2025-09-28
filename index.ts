@@ -77,7 +77,7 @@ function rustDisplayer(enumData: EnumData): string {
     type Error = &'static str;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-${enumData.items.map(item => `\t\t\t${item.value} => Self::${item.name}`).join("\n")}
+${enumData.items.map(item => `\t\t\t${item.value} => Self::${item.name}`).join(",\n")}
             _ => Err("Invalid value")
         }
     }
