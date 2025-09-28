@@ -38,6 +38,9 @@ async function getAllEnums(): Promise<string[]> {
 }
 
 function rustDisplayer(enumData: EnumData): string {
+    if (enumData.items.length === 0) {
+        return ""
+    }
     let output = "";
     if (enumData.deprecationMessage !== "") {
         output += `\n#[deprecated = ${JSON.stringify(enumData.deprecationMessage)}]`;
@@ -50,29 +53,44 @@ function rustDisplayer(enumData: EnumData): string {
             output += enumData.description.trim().split("\n").map(line => `\n/// ${line}`);
         }
     }
-    output += `\n#[repr(u16)]`;
+    output += `\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]`;
+    output += `\n#[repr(u32)]`;
     output += `\npub enum ${enumData.name} {`
-    if (enumData.items.length === 0) {
-        output += "}"
-    } else {
-        for (const item of enumData.items) {
-            if (item.deprecationMessage !== "") {
-                output += `\n\t#[deprecated = "${item.deprecationMessage.trim()}"]`;
-            }
-            if (item.summary !== "") {
-                output += item.summary.trim().split("\n").map(line => `\n\t/// ${line}`);
-            }
-            output += `\n\t${item.name} = ${item.value},`
+    for (const item of enumData.items) {
+        if (item.deprecationMessage !== "") {
+            output += `\n\t#[deprecated = "${item.deprecationMessage.trim()}"]`;
         }
-        output = output.substring(0, output.length - 1)
-        output += "\n}"
+        if (item.summary !== "") {
+            output += item.summary.trim().split("\n").map(line => `\n\t/// ${line}`);
+        }
+        if (item.name === "Self") {
+            item.name = "Self_";
+        }
+        output += `\n\t${item.name} = ${item.value},`
     }
+    output = output.substring(0, output.length - 1)
+    output += "\n}"
+
+    output += `\n\nimpl PartialEq<u32> for ${enumData.name} {\n\tfn eq(&self, other: &u32) -> bool {\n\t\t*self as u32 == *other\n\t}\n}`
+    output += `\n\nimpl PartialEq<${enumData.name}> for u32 {\n\tfn eq(&self, other: &${enumData.name}) -> bool {\n\t\t*self == *other as u32\n\t}\n}`
+    output += `\n\nimpl TryFrom<u32> for ${enumData.name} {
+    type Error = &'static str;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+${enumData.items.map(item => `\t\t\t${item.value} => Self::${item.name}`).join("\n")}
+            _ => Err("Invalid value")
+        }
+    }
+}`
 
     return output;
 }
 
 /// this shit was gpted cuz i dont know fucking c++
 function cppDisplayer(enumData: EnumData): string {
+    if (enumData.items.length === 0) {
+        return ""
+    }
     let output = "";
 
     // Top-level documentation
@@ -89,27 +107,25 @@ function cppDisplayer(enumData: EnumData): string {
     }
 
     // Enum declaration
-    output += `enum class ${enumData.name} : uint16_t {\n`;
+    output += `enum class ${enumData.name} : uint32_t {\n`;
 
-    if (enumData.items.length > 0) {
-        for (const item of enumData.items) {
-            // Per-item comments
-            if (item.summary !== "") {
-                output += item.summary.trim().split("\n").map(line => `\t/// ${line}`).join("\n") + "\n";
-            }
-
-            // Per-item deprecation
-            if (item.deprecationMessage !== "") {
-                output += `\t[[deprecated(${JSON.stringify(item.deprecationMessage)})]]\n`;
-            }
-
-            // Item definition
-            output += `\t${item.name} = ${item.value},\n`;
+    for (const item of enumData.items) {
+        // Per-item comments
+        if (item.summary !== "") {
+            output += item.summary.trim().split("\n").map(line => `\t/// ${line}`).join("\n") + "\n";
         }
 
-        // Remove last comma safely
-        output = output.trimEnd().replace(/,$/, "") + "\n";
+        // Per-item deprecation
+        if (item.deprecationMessage !== "") {
+            output += `\t[[deprecated(${JSON.stringify(item.deprecationMessage)})]]\n`;
+        }
+
+        // Item definition
+        output += `\t${item.name} = ${item.value},\n`;
     }
+
+    // Remove last comma safely
+    output = output.trimEnd().replace(/,$/, "") + "\n";
 
     output += "};";
 
@@ -119,7 +135,7 @@ function cppDisplayer(enumData: EnumData): string {
 const enumUrls = await getAllEnums();
 
 let hppOutput = "/// Dumped by public main (@pubmain on discord and github)\n"
-let rsOutput = "/// Dumped by public main (@pubmain on discord and github)\n"
+let rsOutput = `#![allow(dead_code)]\n#![allow(non_camel_case_types)]\n#![allow(deprecated)]/// Dumped by public main (@pubmain on discord and github)\n`
 
 for (const index in enumUrls) {
     const url = enumUrls[index] as string;
