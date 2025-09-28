@@ -1,5 +1,7 @@
 # roblox-enum-dumper
 
+# YOU NEED BUN.JS TO RUN THIS 
+
 To install dependencies:
 
 ```bash
