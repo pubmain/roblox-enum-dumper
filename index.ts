@@ -100,7 +100,7 @@ function cppDisplayer(enumData: EnumData): string {
 
             // Per-item deprecation
             if (item.deprecationMessage !== "") {
-                output += `\t[[deprecated("${item.deprecationMessage}")]]\n`;
+                output += `\t[[deprecated(${JSON.stringify(item.deprecationMessage)})]]\n`;
             }
 
             // Item definition
