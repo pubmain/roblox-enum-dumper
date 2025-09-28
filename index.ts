@@ -77,7 +77,7 @@ function rustDisplayer(enumData: EnumData): string {
     type Error = &'static str;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-${enumData.items.map(item => `\t\t\t${item.value} => Self::${item.name},`).join("\n")}
+${enumData.items.map(item => `\t\t\t${item.value} => Ok(Self::${item.name}),`).join("\n")}
             _ => Err("Invalid value")
         }
     }
@@ -145,11 +145,13 @@ for (const index in enumUrls) {
     }
     const body = await response.body.text();
     const document = parse(body);
-    const stringData = document.querySelector("#__NEXT_DATA__")?.innerText;
+    let stringData = document.querySelector("#__NEXT_DATA__")?.innerText;
     if (!stringData) {
         throw new Error("Failed to get __NEXT_DATA json data")
     }
+    stringData = stringData.replaceAll(`](/`, `](https://create.roblox.com/docs/`)
     const data = JSON.parse(stringData);
+
     console.log(url, `${index}/${enumUrls.length}`)
 
     hppOutput += cppDisplayer(data.props.pageProps.data.apiReference) + "\n"
