@@ -135,7 +135,7 @@ function cppDisplayer(enumData: EnumData): string {
 const enumUrls = await getAllEnums();
 
 let hppOutput = "/// Dumped by public main (@pubmain on discord and github)\n"
-let rsOutput = `#![allow(dead_code)]\n#![allow(non_camel_case_types)]\n#![allow(deprecated)]/// Dumped by public main (@pubmain on discord and github)\n`
+let rsOutput = `#![allow(dead_code)]\n#![allow(non_camel_case_types)]\n#![allow(deprecated)]\n/// Dumped by public main (@pubmain on discord and github)\n`
 
 for (const index in enumUrls) {
     const url = enumUrls[index] as string;
