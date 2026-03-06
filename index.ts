@@ -1,162 +1,197 @@
-import { parse } from "node-html-parser"
+// these fix was done by claude:
+// - faster speed
+// - fix cpp file formatting
 
-const ENTRY_POINT: string = "https://create.roblox.com/docs/reference/engine/enums";
+import { parse } from "node-html-parser";
 
-interface EnumData {
-    name: string,
-    summary: string,
-    description: string,
-    codeSamples: string[],
-    tags: string[],
-    deprecationMessage: string,
-    items: {
-        name: string,
-        summary: string,
-        value: number,
-        tags: string[],
-        deprecationMessage: string
-    }[]
+const ENTRY_POINT = "https://create.roblox.com/docs/reference/engine/enums";
+const CONCURRENCY  = 20;
+
+interface EnumItem {
+    name:               string;
+    summary:            string;
+    value:              number;
+    tags:               string[];
+    deprecationMessage: string;
 }
 
-/// Returns array containing URLs to Enums 
-async function getAllEnums(): Promise<string[]> {
-    const response = await fetch(ENTRY_POINT);
-    if (!response.body) {
-        throw new Error("Request failed. Returned no body");
-    }
-    const body = await response.body.text();
-    const document = parse(body);
-    const stringData = document.querySelector("#__NEXT_DATA__")?.innerText;
-    if (!stringData) {
-        throw new Error("Failed to get __NEXT_DATA json data")
-    }
-    const data = JSON.parse(stringData);
+interface EnumData {
+    name:               string;
+    summary:            string;
+    description:        string;
+    codeSamples:        string[];
+    tags:               string[];
+    deprecationMessage: string;
+    items:              EnumItem[];
+}
 
-    return data.props.pageProps.data.references.Enum.map(
-        (enumName: string) => `https://create.roblox.com/docs/reference/engine/enums/${enumName}`
-    )
+function docLines(text: string, indent = ""): string {
+    return text.trim().split("\n").map(l => `${indent}/// ${l}`).join("\n");
+}
+
+async function fetchNextData(url: string): Promise<any> {
+    const res  = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+    const body = await res.text();
+    const doc  = parse(body);
+    const raw  = doc.querySelector("#__NEXT_DATA__")?.innerText;
+    if (!raw) throw new Error(`No __NEXT_DATA__ at ${url}`);
+    return JSON.parse(raw.replaceAll("](/", "](https://create.roblox.com/docs/"));
+}
+
+async function getAllEnumUrls(): Promise<string[]> {
+    const data = await fetchNextData(ENTRY_POINT);
+    return (data.props.pageProps.data.references.Enum as string[]).map(
+        name => `https://create.roblox.com/docs/reference/engine/enums/${name}`
+    );
+}
+
+async function fetchEnumData(url: string): Promise<EnumData> {
+    const data = await fetchNextData(url);
+    return data.props.pageProps.data.apiReference as EnumData;
+}
+
+async function fetchAll(urls: string[]): Promise<EnumData[]> {
+    const results: EnumData[] = new Array(urls.length);
+    let next = 0;
+
+    async function worker() {
+        while (next < urls.length) {
+            const i   = next++;
+            const url = urls[i]!;
+            console.log(`[${i + 1}/${urls.length}] ${url}`);
+            results[i] = await fetchEnumData(url);
+        }
+    }
+
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    return results;
+}
+
+const CPP_RESERVED = new Set([
+    "delete", "new", "inline", "return", "register", "for", "while",
+    "if", "else", "switch", "case", "break", "continue", "default",
+    "class", "struct", "union", "void", "int", "float", "double",
+    "bool", "auto", "const", "static", "extern", "volatile", "typedef",
+    "do", "goto", "try", "catch", "throw", "namespace", "template",
+    "operator", "private", "public", "protected", "virtual", "explicit",
+    "friend", "using", "typename", "this", "true", "false", "nullptr",
+    "sizeof", "alignof", "decltype", "noexcept", "constexpr", "thread_local"
+]);
+
+function cppDisplayer(enumData: EnumData): string {
+    if (enumData.items.length === 0) return "";
+
+    let out = "";
+
+    if (enumData.summary !== "") {
+        out += docLines(enumData.summary) + "\n";
+    }
+    if (enumData.description !== "" && enumData.description !== enumData.summary) {
+        out += docLines(enumData.description) + "\n";
+    }
+    if (enumData.deprecationMessage !== "") {
+        out += `/// @deprecated ${enumData.deprecationMessage.trim().replaceAll("\n", " ")}\n`;
+    }
+
+    out += `enum class ${enumData.name} : uint32_t {\n`;
+
+    for (let i = 0; i < enumData.items.length; i++) {
+        const item     = enumData.items[i]!;
+        const isLast   = i === enumData.items.length - 1;
+        const safeName = CPP_RESERVED.has(item.name) ? `${item.name}_` : item.name;
+
+        if (item.summary !== "") {
+            out += docLines(item.summary, "\t") + "\n";
+        }
+        if (item.deprecationMessage !== "") {
+            out += `\t/// @deprecated ${item.deprecationMessage.trim().replaceAll("\n", " ")}\n`;
+        }
+
+        out += `\t${safeName} = ${item.value}${isLast ? "" : ","}\n`;
+    }
+
+    out += "};";
+    return out;
 }
 
 function rustDisplayer(enumData: EnumData): string {
-    if (enumData.items.length === 0) {
-        return ""
-    }
-    let output = "";
+    if (enumData.items.length === 0) return "";
+
+    const items: EnumItem[] = enumData.items.map(item => ({
+        ...item,
+        name: item.name === "Self" ? "Self_" : item.name,
+    }));
+
+    let out = "";
+
     if (enumData.deprecationMessage !== "") {
-        output += `\n#[deprecated = ${JSON.stringify(enumData.deprecationMessage)}]`;
+        out += `#[deprecated = ${JSON.stringify(enumData.deprecationMessage)}]\n`;
     }
     if (enumData.summary !== "") {
-        output += enumData.summary.trim().split("\n").map(line => `\n/// ${line}`);
+        out += docLines(enumData.summary) + "\n";
     }
-    if (enumData.summary !== enumData.description) {
-        if (enumData.description !== "") {
-            output += enumData.description.trim().split("\n").map(line => `\n/// ${line}`);
-        }
+    if (enumData.description !== "" && enumData.description !== enumData.summary) {
+        out += docLines(enumData.description) + "\n";
     }
-    output += `\n#[derive(Debug, Clone, Copy, PartialEq, Eq)]`;
-    output += `\n#[repr(u32)]`;
-    output += `\npub enum ${enumData.name} {`
-    for (const item of enumData.items) {
-        if (item.deprecationMessage !== "") {
-            output += `\n\t#[deprecated = "${item.deprecationMessage.trim()}"]`;
-        }
-        if (item.summary !== "") {
-            output += item.summary.trim().split("\n").map(line => `\n\t/// ${line}`);
-        }
-        if (item.name === "Self") {
-            item.name = "Self_";
-        }
-        output += `\n\t${item.name} = ${item.value},`
-    }
-    output = output.substring(0, output.length - 1)
-    output += "\n}"
 
-    output += `\n\nimpl PartialEq<u32> for ${enumData.name} {\n\tfn eq(&self, other: &u32) -> bool {\n\t\t*self as u32 == *other\n\t}\n}`
-    output += `\n\nimpl PartialEq<${enumData.name}> for u32 {\n\tfn eq(&self, other: &${enumData.name}) -> bool {\n\t\t*self == *other as u32\n\t}\n}`
-    output += `\n\nimpl TryFrom<u32> for ${enumData.name} {
+    out += `#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n`;
+    out += `#[repr(u32)]\n`;
+    out += `pub enum ${enumData.name} {\n`;
+
+    for (const item of items) {
+        if (item.summary !== "") {
+            out += docLines(item.summary, "\t") + "\n";
+        }
+        if (item.deprecationMessage !== "") {
+            out += `\t#[deprecated = ${JSON.stringify(item.deprecationMessage.trim())}]\n`;
+        }
+        out += `\t${item.name} = ${item.value},\n`;
+    }
+
+    out += "}\n";
+
+    const n = enumData.name;
+
+    out += `
+impl PartialEq<u32> for ${n} {
+    fn eq(&self, other: &u32) -> bool { *self as u32 == *other }
+}
+
+impl PartialEq<${n}> for u32 {
+    fn eq(&self, other: &${n}) -> bool { *self == *other as u32 }
+}
+
+impl TryFrom<u32> for ${n} {
     type Error = &'static str;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-${enumData.items.map(item => `\t\t\t${item.value} => Ok(Self::${item.name}),`).join("\n")}
-            _ => Err("Invalid value")
+${items.map(item => `            ${item.value} => Ok(Self::${item.name}),`).join("\n")}
+            _ => Err("Invalid value"),
         }
     }
-}`
+}`;
 
-    return output;
+    return out;
 }
 
-/// this shit was gpted cuz i dont know fucking c++
-function cppDisplayer(enumData: EnumData): string {
-    if (enumData.items.length === 0) {
-        return ""
-    }
-    let output = "";
+const HEADER = "/// Dumped by public main (@pubmain on discord and github)\n"
+             + "/// Dumped using https://github.com/pubmain/roblox-enum-dumper\n\n";
 
-    // Top-level documentation
-    if (enumData.summary !== "") {
-        output += enumData.summary.trim().split("\n").map(line => `/// ${line}`).join("\n") + "\n";
-    }
-    if (enumData.summary !== enumData.description && enumData.description !== "") {
-        output += enumData.description.trim().split("\n").map(line => `/// ${line}`).join("\n") + "\n";
-    }
+const enumUrls = await getAllEnumUrls();
+const allEnums = await fetchAll(enumUrls);
 
-    // Top-level deprecation
-    if (enumData.deprecationMessage !== "") {
-        output += `[[deprecated("${enumData.deprecationMessage}")]]\n`;
-    }
+let hppOutput = `#pragma once\n#include <cstdint>\n\n${HEADER}`;
+let rsOutput  = `#![allow(dead_code)]\n#![allow(non_camel_case_types)]\n#![allow(deprecated)]\n\n${HEADER}`;
 
-    // Enum declaration
-    output += `enum class ${enumData.name} : uint32_t {\n`;
-
-    for (const item of enumData.items) {
-        // Per-item comments
-        if (item.summary !== "") {
-            output += item.summary.trim().split("\n").map(line => `\t/// ${line}`).join("\n") + "\n";
-        }
-
-        // Per-item deprecation
-        if (item.deprecationMessage !== "") {
-            output += `\t[[deprecated(${JSON.stringify(item.deprecationMessage)})]]\n`;
-        }
-
-        // Item definition
-        output += `\t${item.name} = ${item.value},\n`;
-    }
-
-    // Remove last comma safely
-    output = output.trimEnd().replace(/,$/, "") + "\n";
-
-    output += "};";
-
-    return output;
+for (const enumData of allEnums) {
+    const cpp  = cppDisplayer(enumData);
+    const rust = rustDisplayer(enumData);
+    if (cpp)  hppOutput += cpp  + "\n\n";
+    if (rust) rsOutput  += rust + "\n\n";
 }
 
-const enumUrls = await getAllEnums();
+await Bun.write("enums.hpp", hppOutput.trimEnd() + "\n");
+await Bun.write("enums.rs",  rsOutput.trimEnd()  + "\n");
 
-let hppOutput = "/// Dumped by public main (@pubmain on discord and github)/// Dumped using https://github.com/pubmain/roblox-enum-dumper\n"
-let rsOutput = `#![allow(dead_code)]\n#![allow(non_camel_case_types)]\n#![allow(deprecated)]\n${hppOutput}`
-
-for (const index in enumUrls) {
-    const url = enumUrls[index] as string;
-    const response = await fetch(url);
-    if (!response.body) {
-        throw new Error("Request failed. Returned no body");
-    }
-    const body = await response.body.text();
-    const document = parse(body);
-    let stringData = document.querySelector("#__NEXT_DATA__")?.innerText;
-    if (!stringData) {
-        throw new Error("Failed to get __NEXT_DATA json data")
-    }
-    stringData = stringData.replaceAll(`](/`, `](https://create.roblox.com/docs/`)
-    const data = JSON.parse(stringData);
-
-    console.log(url, `${index}/${enumUrls.length}`)
-
-    hppOutput += cppDisplayer(data.props.pageProps.data.apiReference) + "\n"
-    rsOutput += rustDisplayer(data.props.pageProps.data.apiReference) + "\n"
-}
-
-await Bun.write("enums.hpp", hppOutput)
-await Bun.write("enums.rs", rsOutput)
+console.log(`Done. Wrote ${allEnums.length} enums.`);
